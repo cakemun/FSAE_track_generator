@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FSAE Track Cone Placer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --orange: #ff6a00;
+    --purple: #6a1fd0;
+    --left: #1976d2;
+    --right: #f2c200;
+    --ref: #e53935;
+    --bg: #1e2126;
+    --panel: #262a31;
+    --panel2: #2f343c;
+    --text: #e8e8e8;
+    --muted: #9aa0a6;
+    --border: #3a3f47;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: "Segoe UI", Arial, sans-serif; background: var(--bg); color: var(--text); }
+  #app { display: flex; height: 100vh; width: 100vw; }
+  #sidebar {
+    width: 340px;
+    min-width: 340px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #sidebar h1 { font-size: 16px; margin: 14px 14px 4px; }
+  #sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 14px 6px; }
+  .section { padding: 0 14px 12px; border-bottom: 1px solid var(--border); }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row + .row { margin-top: 6px; }
+  input[type=text], input[type=number], select {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    width: 100%;
+  }
+  label.small { font-size: 11px; color: var(--muted); display: block; margin-bottom: 3px; }
+  button {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.15); }
+  button.primary { background: #2c6fd1; border-color: #2c6fd1; color: white; }
+  button.danger { background: #7a2020; border-color: #7a2020; color: #ffdada; }
+  .cone-btn {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 4px;
+    border-radius: 8px;
+    border: 2px solid var(--border);
+    background: var(--panel2);
+  }
+  .cone-btn.active { border-color: #fff; box-shadow: 0 0 0 1px #fff inset; }
+  .cone-btn .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,.6); }
+  .cone-btn .count { font-size: 10px; color: var(--muted); }
+  .cone-grid { display: flex; gap: 6px; }
+  #refBtn { width: 100%; margin-top: 8px; display:flex; align-items:center; justify-content:center; gap:6px; }
+  #list { flex: 1; overflow-y: auto; }
+  .item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .item:hover { background: var(--panel2); }
+  .item .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  .item .info { flex: 1; overflow: hidden; }
+  .item .info .name { font-weight: 600; }
+  .item .info .coords { color: var(--muted); font-size: 11px; }
+  .item .del { background: none; border: none; color: #ff8080; font-size: 15px; padding: 2px 6px; }
+  #actions { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); }
+  #actions .row button { flex: 1; }
+  #map { flex: 1; }
+  #toast {
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #222;
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s;
+    z-index: 9999;
+  }
+  #toast.show { opacity: .95; }
+  #emptyHint { padding: 14px; color: var(--muted); font-size: 12px; }
+  .cone-marker .cone-dot {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid white; box-shadow: 0 0 3px rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 9px; font-weight: bold;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <h1>FSAE Track Cone Placer</h1>
+
+    <div class="section">
+      <h2 style="margin-top:0">Place Cones</h2>
+      <div class="cone-grid">
+        <button class="cone-btn active" data-type="orange_cone"><span class="dot" style="background:var(--orange)"></span>Orange<span class="count">0</span></button>
+        <button class="cone-btn" data-type="purple_cone"><span class="dot" style="background:var(--purple)"></span>Purple<span class="count">0</span></button>
+        <button class="cone-btn" data-type="left_cone"><span class="dot" style="background:var(--left)"></span>Left<span class="count">0</span></button>
+        <button class="cone-btn" data-type="right_cone"><span class="dot" style="background:var(--right)"></span>Right<span class="count">0</span></button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div style="flex:1">
+          <label class="small">Chicane group (Left/Right only, optional)</label>
+          <input type="number" id="groupInput" min="1" placeholder="e.g. 1">
+        </div>
+      </div>
+      <button id="refBtn"><span class="dot" style="width:12px;height:12px;border-radius:50%;background:var(--ref)"></span>Set Reference Position<span class="count" id="refCount" style="margin-left:4px"></span></button>
+      <div class="row" style="margin-top:8px">
+        <button id="undoBtn" style="flex:1">Undo Last</button>
+        <button id="clearBtn" class="danger" style="flex:1">Clear All</button>
+      </div>
+      <div style="margin-top:6px; font-size:11px; color:var(--muted)">Click the map to place the selected cone. Drag a placed marker to reposition it.</div>
+    </div>
+
+    <div class="section">
+      <h2 style="margin-top:0">Find Location</h2>
+      <div class="row">
+        <input type="text" id="searchInput" placeholder="Search address / place...">
+        <button id="searchBtn">Go</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="locateBtn" style="flex:1">Use My Location</button>
+      </div>
+    </div>
+
+    <h2>Placemarks (<span id="totalCount">0</span>)</h2>
+    <div id="list"></div>
+    <div id="emptyHint">No placemarks yet. Select a cone type and click the map.</div>
+
+    <div id="actions">
+      <div class="row">
+        <input type="text" id="trackNameInput" placeholder="Track name" value="FSAE_Track">
+      </div>
+      <div class="row">
+        <button class="primary" id="exportBtn" style="flex:1">Export KML</button>
+        <button id="importBtn" style="flex:1">Import KML</button>
+      </div>
+      <input type="file" id="fileInput" accept=".kml" style="display:none">
+    </div>
+  </div>
+  <div id="map"></div>
+</div>
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const CONE_COLORS = {
+  orange_cone: '#ff6a00',
+  purple_cone: '#6a1fd0',
+  left_cone: '#1976d2',
+  right_cone: '#f2c200',
+  reference_position: '#e53935'
+};
+const STORAGE_KEY = 'fsae_kml_app_state_v1';
+
+let placemarks = []; // {id, type, idx, group, lat, lon, alt, marker}
+let nextId = 1;
+let currentType = 'orange_cone';
+
+const map = L.map('map', { zoomControl: true }).setView([0, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 20,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+function escapeXml(s) {
+  return String(s).replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
+}
+
+function nextIndex(type) {
+  let max = 0;
+  for (const p of placemarks) if (p.type === type) max = Math.max(max, p.idx);
+  return max + 1;
+}
+
+function nameFor(p) {
+  if (p.type === 'reference_position') return 'reference_position';
+  let n = `${p.type}-${p.idx}`;
+  if ((p.type === 'left_cone' || p.type === 'right_cone') && p.group) n += `_${p.group}`;
+  return n;
+}
+
+function makeIcon(type) {
+  const color = CONE_COLORS[type] || '#888';
+  const glyph = type === 'reference_position' ? '&#9733;' : '';
+  return L.divIcon({
+    className: 'cone-marker',
+    html: `<div class="cone-dot" style="background:${color}">${glyph}</div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
+}
+
+function addPlacemark(type, latlng, opts) {
+  opts = opts || {};
+  if (type === 'reference_position') {
+    const existing = placemarks.find(p => p.type === 'reference_position');
+    if (existing) removePlacemark(existing.id, true);
+  }
+  const idx = opts.idx !== undefined ? opts.idx : nextIndex(type);
+  const group = (type === 'left_cone' || type === 'right_cone')
+    ? (opts.group !== undefined ? opts.group : (document.getElementById('groupInput').value ? parseInt(document.getElementById('groupInput').value, 10) : null))
+    : null;
+
+  const p = {
+    id: nextId++,
+    type, idx, group,
+    lat: latlng.lat, lon: latlng.lng, alt: opts.alt || 0
+  };
+
+  const marker = L.marker(latlng, { icon: makeIcon(type), draggable: true });
+  marker.addTo(map);
+  marker.on('drag', () => {
+    p.lat = marker.getLatLng().lat;
+    p.lon = marker.getLatLng().lng;
+    renderList();
+    saveState();
+  });
+  marker.on('click', () => flyTo(p));
+  p.marker = marker;
+
+  placemarks.push(p);
+  renderList();
+  saveState();
+  return p;
+}
+
+function removePlacemark(id, silent) {
+  const idx = placemarks.findIndex(p => p.id === id);
+  if (idx === -1) return;
+  const p = placemarks[idx];
+  map.removeLayer(p.marker);
+  placemarks.splice(idx, 1);
+  if (!silent) { renderList(); saveState(); }
+}
+
+function flyTo(p) {
+  map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 18));
+}
+
+function renderList() {
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  document.getElementById('emptyHint').style.display = placemarks.length ? 'none' : 'block';
+  document.getElementById('totalCount').textContent = placemarks.length;
+
+  for (const type of Object.keys(CONE_COLORS)) {
+    const count = placemarks.filter(p => p.type === type).length;
+    if (type === 'reference_position') {
+      document.getElementById('refCount').textContent = count ? '(set)' : '';
+    } else {
+      const btn = document.querySelector(`.cone-btn[data-type="${type}"] .count`);
+      if (btn) btn.textContent = count;
+    }
+  }
+
+  for (const p of placemarks) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `
+      <span class="dot" style="background:${CONE_COLORS[p.type]}"></span>
+      <div class="info">
+        <div class="name">${escapeXml(nameFor(p))}</div>
+        <div class="coords">${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}</div>
+      </div>
+      <button class="del" title="Delete">&times;</button>`;
+    row.querySelector('.info').addEventListener('click', () => flyTo(p));
+    row.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); removePlacemark(p.id); });
+    list.appendChild(row);
+  }
+}
+
+// --- Cone type selector ---
+document.querySelectorAll('.cone-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.cone-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentType = btn.dataset.type;
+  });
+});
+document.getElementById('refBtn').addEventListener('click', () => {
+  document.querySelectorAll('.cone-btn').forEach(b => b.classList.remove('active'));
+  currentType = 'reference_position';
+  toast('Click the map to set the reference position');
+});
+
+map.on('click', (e) => {
+  const p = addPlacemark(currentType, e.latlng);
+  toast(`Placed ${nameFor(p)}`);
+});
+
+// --- Undo / Clear ---
+document.getElementById('undoBtn').addEventListener('click', () => {
+  if (!placemarks.length) return;
+  const last = placemarks[placemarks.length - 1];
+  removePlacemark(last.id);
+});
+document.getElementById('clearBtn').addEventListener('click', () => {
+  if (!placemarks.length) return;
+  if (!confirm('Remove all placemarks?')) return;
+  [...placemarks].forEach(p => removePlacemark(p.id, true));
+  renderList();
+  saveState();
+});
+
+// --- Search (Nominatim) & Geolocation ---
+document.getElementById('searchBtn').addEventListener('click', doSearch);
+document.getElementById('searchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+async function doSearch() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (data && data.length) {
+      map.setView([parseFloat(data[0].lat), parseFloat(data[0].lon)], 17);
+    } else {
+      toast('Location not found');
+    }
+  } catch (err) {
+    toast('Search failed (no internet?)');
+  }
+}
+document.getElementById('locateBtn').addEventListener('click', () => {
+  if (!navigator.geolocation) { toast('Geolocation not supported'); return; }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 18),
+    () => toast('Could not get location')
+  );
+});
+
+// --- Export ---
+document.getElementById('exportBtn').addEventListener('click', () => {
+  if (!placemarks.length) { toast('No placemarks to export'); return; }
+  const trackName = document.getElementById('trackNameInput').value.trim() || 'FSAE_Track';
+  const placemarksXml = placemarks.map(p => {
+    const name = escapeXml(nameFor(p));
+    return `    <Placemark>
+      <name>${name}</name>
+      <Point>
+        <coordinates>${p.lon},${p.lat},${p.alt || 0}</coordinates>
+      </Point>
+    </Placemark>`;
+  }).join('\n');
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${escapeXml(trackName)}</name>
+${placemarksXml}
+  </Document>
+</kml>`;
+  const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${trackName}.kml`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// --- Import ---
+document.getElementById('importBtn').addEventListener('click', () => document.getElementById('fileInput').click());
+document.getElementById('fileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => importKml(reader.result);
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+function parseNameStructured(name) {
+  let prefix = name, idx = 0, group = null;
+  const lastDash = name.lastIndexOf('-');
+  if (lastDash !== -1) {
+    prefix = name.slice(0, lastDash);
+    const idxPart = name.slice(lastDash + 1);
+    const underscore = idxPart.indexOf('_');
+    const idxStr = underscore === -1 ? idxPart : idxPart.slice(0, underscore);
+    const groupStr = underscore === -1 ? '' : idxPart.slice(underscore + 1);
+    const parsedIdx = parseInt(idxStr, 10);
+    idx = isNaN(parsedIdx) ? 0 : parsedIdx;
+    if (groupStr) {
+      const parsedGroup = parseInt(groupStr, 10);
+      group = isNaN(parsedGroup) ? null : parsedGroup;
+    }
+  }
+  return { prefix, idx, group };
+}
+
+function importKml(text) {
+  let doc;
+  try {
+    doc = new DOMParser().parseFromString(text, 'text/xml');
+    if (doc.querySelector('parsererror')) throw new Error('parse error');
+  } catch (err) {
+    toast('Failed to parse KML file');
+    return;
+  }
+  const placemarkEls = doc.getElementsByTagName('Placemark');
+  if (!placemarkEls.length) { toast('No placemarks found in file'); return; }
+
+  [...placemarks].forEach(p => removePlacemark(p.id, true));
+
+  const bounds = [];
+  for (const pm of placemarkEls) {
+    const nameEl = pm.getElementsByTagName('name')[0];
+    const name = nameEl && nameEl.textContent ? nameEl.textContent.trim() : 'unnamed';
+    const coordsEl = pm.getElementsByTagName('coordinates')[0];
+    if (!coordsEl || !coordsEl.textContent) continue;
+    const parts = coordsEl.textContent.trim().split(',');
+    if (parts.length < 2) continue;
+    const lon = parseFloat(parts[0]);
+    const lat = parseFloat(parts[1]);
+    const alt = parts.length > 2 ? parseFloat(parts[2]) : 0;
+
+    let type, idx, group;
+    if (name.toLowerCase().startsWith('reference_position') || name.toLowerCase() === 'reference') {
+      type = 'reference_position'; idx = 0; group = null;
+    } else {
+      const parsed = parseNameStructured(name);
+      type = parsed.prefix;
+      idx = parsed.idx;
+      group = parsed.group;
+    }
+    if (!CONE_COLORS[type]) CONE_COLORS[type] = '#888888';
+
+    const p = addPlacemark(type, L.latLng(lat, lon), { idx, group, alt });
+    bounds.push([lat, lon]);
+  }
+  renderList();
+  saveState();
+  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40] });
+  toast(`Imported ${placemarkEls.length} placemarks`);
+}
+
+// --- Persistence ---
+function saveState() {
+  const data = placemarks.map(p => ({ type: p.type, idx: p.idx, group: p.group, lat: p.lat, lon: p.lon, alt: p.alt }));
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (err) { /* storage unavailable */ }
+}
+
+function loadState() {
+  let data;
+  try { data = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (err) { data = []; }
+  if (!Array.isArray(data) || !data.length) return;
+  const bounds = [];
+  for (const d of data) {
+    addPlacemark(d.type, L.latLng(d.lat, d.lon), { idx: d.idx, group: d.group, alt: d.alt });
+    bounds.push([d.lat, d.lon]);
+  }
+  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40] });
+}
+
+loadState();
+if (!placemarks.length && navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(
+    (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 17),
+    () => {}
+  );
+}
+</script>
+</body>
+</html>
