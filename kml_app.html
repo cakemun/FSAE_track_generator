@@ -85,11 +85,25 @@
     cursor: pointer;
   }
   .item:hover { background: var(--panel2); }
+  .item.selected { background: var(--panel2); box-shadow: inset 3px 0 0 #2c6fd1; }
   .item .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
   .item .info { flex: 1; overflow: hidden; }
   .item .info .name { font-weight: 600; }
   .item .info .coords { color: var(--muted); font-size: 11px; }
   .item .del { background: none; border: none; color: #ff8080; font-size: 15px; padding: 2px 6px; }
+  .item .group-chip {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .item .group-chip:hover { color: var(--text); border-color: #fff; }
+  .item .regroup { background: none; border: none; color: var(--muted); font-size: 12px; padding: 2px 4px; flex: 0 0 auto; }
+  .item .regroup:hover { color: var(--text); }
   #actions { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); }
   #actions .row button { flex: 1; }
   #map { flex: 1; }
@@ -116,6 +130,16 @@
     display: flex; align-items: center; justify-content: center;
     color: white; font-size: 9px; font-weight: bold;
   }
+  .cone-marker.selected .cone-dot {
+    box-shadow: 0 0 0 3px rgba(255,255,255,.95), 0 0 12px 5px rgba(44,111,209,.85);
+    animation: cone-pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes cone-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.3); }
+  }
+  .src-btn { flex: 1; }
+  .src-btn.active { background: #2c6fd1; border-color: #2c6fd1; color: #fff; }
 </style>
 </head>
 <body>
@@ -132,17 +156,28 @@
         <button class="cone-btn" data-type="right_cone"><span class="dot" style="background:var(--right)"></span>Right<span class="count">0</span></button>
       </div>
       <div class="row" style="margin-top:8px">
-        <div style="flex:1">
-          <label class="small">Chicane group (Left/Right only, optional)</label>
-          <input type="number" id="groupInput" min="1" placeholder="e.g. 1">
-        </div>
+        <button id="chicaneBtn" style="flex:1">Start Chicane</button>
       </div>
+      <div id="chicaneStatus" style="margin-top:4px; font-size:11px; color:var(--muted)">No chicane active. Left/Right cones placed now will have no chicane group.</div>
       <button id="refBtn"><span class="dot" style="width:12px;height:12px;border-radius:50%;background:var(--ref)"></span>Set Reference Position<span class="count" id="refCount" style="margin-left:4px"></span></button>
       <div class="row" style="margin-top:8px">
         <button id="undoBtn" style="flex:1">Undo Last</button>
         <button id="clearBtn" class="danger" style="flex:1">Clear All</button>
       </div>
       <div style="margin-top:6px; font-size:11px; color:var(--muted)">Click the map to place the selected cone. Drag a placed marker to reposition it.</div>
+    </div>
+
+    <div class="section">
+      <h2 style="margin-top:0">Map Source</h2>
+      <div class="row">
+        <button id="onlineSourceBtn" class="src-btn active">Online (OSM)</button>
+        <button id="offlineSourceBtn" class="src-btn">Offline Package</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="loadMbtilesBtn" style="flex:1">Load .mbtiles File...</button>
+      </div>
+      <input type="file" id="mbtilesInput" accept=".mbtiles" style="display:none">
+      <div id="mbtilesStatus" style="margin-top:6px; font-size:11px; color:var(--muted)">No offline package loaded. Online tiles may be blocked by OSM when run from a local file - load a city .mbtiles package for reliable offline use.</div>
     </div>
 
     <div class="section">
@@ -191,10 +226,139 @@ let nextId = 1;
 let currentType = 'orange_cone';
 
 const map = L.map('map', { zoomControl: true }).setView([0, 0], 2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+const onlineLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 20,
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
+
+// --- Offline MBTiles map source (avoids OSM tile-usage-policy blocks seen on file:// origins) ---
+let SQL = null;
+let mbtilesDb = null;
+let offlineLayer = null;
+
+const MBTilesLayer = L.TileLayer.extend({
+  initialize: function (db, mimeType, options) {
+    this._db = db;
+    this._mime = mimeType;
+    L.TileLayer.prototype.initialize.call(this, '', options);
+  },
+  createTile: function (coords, done) {
+    const tile = document.createElement('img');
+    const z = coords.z;
+    const x = coords.x;
+    const y = Math.pow(2, z) - 1 - coords.y; // MBTiles uses TMS row order (flipped vs XYZ)
+    const db = this._db;
+    const mime = this._mime;
+    setTimeout(() => {
+      try {
+        const stmt = db.prepare('SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?');
+        stmt.bind([z, x, y]);
+        if (stmt.step()) {
+          const row = stmt.getAsObject();
+          stmt.free();
+          const url = URL.createObjectURL(new Blob([row.tile_data], { type: mime }));
+          tile.onload = () => { URL.revokeObjectURL(url); done(null, tile); };
+          tile.onerror = () => done(new Error('tile decode error'), tile);
+          tile.src = url;
+        } else {
+          stmt.free();
+          done(null, tile); // no tile at this coordinate in the package - leave blank
+        }
+      } catch (err) {
+        done(err, tile);
+      }
+    }, 0);
+    return tile;
+  }
+});
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureSqlJs() {
+  if (window.initSqlJs) return;
+  await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js');
+}
+
+function setMapSource(mode) {
+  const useOffline = mode === 'offline';
+  document.getElementById('onlineSourceBtn').classList.toggle('active', !useOffline);
+  document.getElementById('offlineSourceBtn').classList.toggle('active', useOffline);
+  if (useOffline) {
+    if (map.hasLayer(onlineLayer)) map.removeLayer(onlineLayer);
+    if (offlineLayer && !map.hasLayer(offlineLayer)) offlineLayer.addTo(map);
+  } else {
+    if (offlineLayer && map.hasLayer(offlineLayer)) map.removeLayer(offlineLayer);
+    if (!map.hasLayer(onlineLayer)) onlineLayer.addTo(map);
+  }
+}
+
+document.getElementById('onlineSourceBtn').addEventListener('click', () => setMapSource('online'));
+document.getElementById('offlineSourceBtn').addEventListener('click', () => {
+  if (!offlineLayer) { toast('Load an .mbtiles package first'); return; }
+  setMapSource('offline');
+});
+document.getElementById('loadMbtilesBtn').addEventListener('click', () => document.getElementById('mbtilesInput').click());
+document.getElementById('mbtilesInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const statusEl = document.getElementById('mbtilesStatus');
+  statusEl.textContent = 'Loading package...';
+  try {
+    await ensureSqlJs();
+    if (!SQL) {
+      SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` });
+    }
+    const buf = await file.arrayBuffer();
+    const db = new SQL.Database(new Uint8Array(buf));
+
+    let format = 'png', bounds = null, minZoom = 0, maxZoom = 19;
+    try {
+      const res = db.exec('SELECT name, value FROM metadata');
+      if (res.length) {
+        for (const [name, value] of res[0].values) {
+          if (name === 'format') format = value;
+          else if (name === 'bounds') bounds = value.split(',').map(Number);
+          else if (name === 'minzoom') minZoom = parseInt(value, 10);
+          else if (name === 'maxzoom') maxZoom = parseInt(value, 10);
+        }
+      }
+    } catch (metaErr) { /* metadata table is optional in the MBTiles spec */ }
+
+    const mime = (format === 'jpg' || format === 'jpeg') ? 'image/jpeg' : 'image/png';
+
+    if (mbtilesDb) mbtilesDb.close();
+    mbtilesDb = db;
+
+    if (offlineLayer) map.removeLayer(offlineLayer);
+    offlineLayer = new MBTilesLayer(db, mime, {
+      minZoom, maxZoom,
+      attribution: 'Offline OSM package'
+    });
+
+    setMapSource('offline');
+    statusEl.textContent = `Loaded: ${file.name} (zoom ${minZoom}-${maxZoom})`;
+
+    if (bounds && bounds.length === 4) {
+      map.fitBounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]]);
+    }
+    toast('Offline map package loaded');
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = 'Failed to load package (invalid .mbtiles file?)';
+    toast('Failed to load offline package');
+  }
+});
 
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -221,15 +385,31 @@ function nameFor(p) {
   return n;
 }
 
-function makeIcon(type) {
+function makeIcon(type, selected) {
   const color = CONE_COLORS[type] || '#888';
   const glyph = type === 'reference_position' ? '&#9733;' : '';
   return L.divIcon({
-    className: 'cone-marker',
+    className: `cone-marker${selected ? ' selected' : ''}`,
     html: `<div class="cone-dot" style="background:${color}">${glyph}</div>`,
     iconSize: [16, 16],
     iconAnchor: [8, 8]
   });
+}
+
+let selectedId = null;
+
+function selectPlacemark(id) {
+  const prevId = selectedId;
+  selectedId = (selectedId === id) ? null : id;
+  if (prevId !== null) {
+    const prev = placemarks.find(p => p.id === prevId);
+    if (prev) prev.marker.setIcon(makeIcon(prev.type, false));
+  }
+  if (selectedId !== null) {
+    const curr = placemarks.find(p => p.id === selectedId);
+    if (curr) curr.marker.setIcon(makeIcon(curr.type, true));
+  }
+  renderList();
 }
 
 function addPlacemark(type, latlng, opts) {
@@ -240,7 +420,7 @@ function addPlacemark(type, latlng, opts) {
   }
   const idx = opts.idx !== undefined ? opts.idx : nextIndex(type);
   const group = (type === 'left_cone' || type === 'right_cone')
-    ? (opts.group !== undefined ? opts.group : (document.getElementById('groupInput').value ? parseInt(document.getElementById('groupInput').value, 10) : null))
+    ? (opts.group !== undefined ? opts.group : (chicaneActive ? currentChicaneGroup : null))
     : null;
 
   const p = {
@@ -257,7 +437,7 @@ function addPlacemark(type, latlng, opts) {
     renderList();
     saveState();
   });
-  marker.on('click', () => flyTo(p));
+  marker.on('click', () => { flyTo(p); selectPlacemark(p.id); });
   p.marker = marker;
 
   placemarks.push(p);
@@ -272,6 +452,7 @@ function removePlacemark(id, silent) {
   const p = placemarks[idx];
   map.removeLayer(p.marker);
   placemarks.splice(idx, 1);
+  if (selectedId === id) selectedId = null;
   if (!silent) { renderList(); saveState(); }
 }
 
@@ -297,15 +478,26 @@ function renderList() {
 
   for (const p of placemarks) {
     const row = document.createElement('div');
-    row.className = 'item';
+    row.className = 'item' + (p.id === selectedId ? ' selected' : '');
+    const canGroup = p.type === 'left_cone' || p.type === 'right_cone';
+    const groupChip = canGroup
+      ? `<button class="group-chip" title="Resume this chicane - new Left/Right cones will join it">${p.group ? 'Grp ' + p.group : 'No Grp'}</button>`
+      : '';
+    const regroupBtn = canGroup ? `<button class="regroup" title="Rename / merge / ungroup this chicane">&#9998;</button>` : '';
     row.innerHTML = `
       <span class="dot" style="background:${CONE_COLORS[p.type]}"></span>
       <div class="info">
         <div class="name">${escapeXml(nameFor(p))}</div>
         <div class="coords">${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}</div>
       </div>
+      ${groupChip}
+      ${regroupBtn}
       <button class="del" title="Delete">&times;</button>`;
-    row.querySelector('.info').addEventListener('click', () => flyTo(p));
+    row.querySelector('.info').addEventListener('click', () => { flyTo(p); selectPlacemark(p.id); });
+    if (canGroup) {
+      row.querySelector('.group-chip').addEventListener('click', (e) => { e.stopPropagation(); resumeChicane(p.group); });
+      row.querySelector('.regroup').addEventListener('click', (e) => { e.stopPropagation(); renameChicaneGroup(p.group); });
+    }
     row.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); removePlacemark(p.id); });
     list.appendChild(row);
   }
@@ -325,8 +517,78 @@ document.getElementById('refBtn').addEventListener('click', () => {
   toast('Click the map to set the reference position');
 });
 
+// --- Chicane grouping: Start Chicane tags every Left/Right cone placed next with the same
+// auto-incrementing "_<group>" suffix, until ended or a new chicane is started. ---
+let chicaneActive = false;
+let chicaneGroupCounter = 0;
+let currentChicaneGroup = null;
+
+function updateChicaneUI() {
+  const btn = document.getElementById('chicaneBtn');
+  const status = document.getElementById('chicaneStatus');
+  btn.classList.toggle('primary', chicaneActive);
+  if (chicaneActive) {
+    btn.textContent = `End Chicane (Group ${currentChicaneGroup})`;
+    status.textContent = `Chicane ${currentChicaneGroup} active - Left/Right cones placed now are tagged _${currentChicaneGroup}.`;
+  } else {
+    btn.textContent = 'Start Chicane';
+    status.textContent = 'No chicane active. Left/Right cones placed now will have no chicane group.';
+  }
+}
+
+function syncChicaneCounter() {
+  let max = 0;
+  for (const p of placemarks) {
+    if ((p.type === 'left_cone' || p.type === 'right_cone') && p.group) max = Math.max(max, p.group);
+  }
+  chicaneGroupCounter = Math.max(chicaneGroupCounter, max);
+}
+
+document.getElementById('chicaneBtn').addEventListener('click', () => {
+  if (chicaneActive) {
+    chicaneActive = false;
+  } else {
+    chicaneGroupCounter += 1;
+    currentChicaneGroup = chicaneGroupCounter;
+    chicaneActive = true;
+  }
+  updateChicaneUI();
+});
+
+function resumeChicane(group) {
+  if (!group) { toast('This cone has no chicane group to resume'); return; }
+  chicaneActive = true;
+  currentChicaneGroup = group;
+  chicaneGroupCounter = Math.max(chicaneGroupCounter, group);
+  updateChicaneUI();
+  toast(`Resumed chicane ${group} - new Left/Right cones will join it`);
+}
+
+function renameChicaneGroup(oldGroup) {
+  if (!oldGroup) { toast('This cone has no chicane group'); return; }
+  const input = prompt(`Rename chicane group ${oldGroup} to (leave blank to ungroup):`, oldGroup);
+  if (input === null) return;
+  const trimmed = input.trim();
+  const newGroup = trimmed === '' ? null : parseInt(trimmed, 10);
+  if (trimmed !== '' && (isNaN(newGroup) || newGroup <= 0)) { toast('Enter a positive whole number'); return; }
+
+  let changed = 0;
+  for (const p of placemarks) {
+    if ((p.type === 'left_cone' || p.type === 'right_cone') && p.group === oldGroup) {
+      p.group = newGroup;
+      changed++;
+    }
+  }
+  if (currentChicaneGroup === oldGroup) currentChicaneGroup = newGroup;
+  syncChicaneCounter();
+  renderList();
+  saveState();
+  toast(newGroup ? `Renamed chicane ${oldGroup} -> ${newGroup} (${changed} cones)` : `Ungrouped ${changed} cones from chicane ${oldGroup}`);
+}
+
 map.on('click', (e) => {
   const p = addPlacemark(currentType, e.latlng);
+  selectPlacemark(p.id);
   toast(`Placed ${nameFor(p)}`);
 });
 
@@ -469,6 +731,7 @@ function importKml(text) {
     const p = addPlacemark(type, L.latLng(lat, lon), { idx, group, alt });
     bounds.push([lat, lon]);
   }
+  syncChicaneCounter();
   renderList();
   saveState();
   if (bounds.length) map.fitBounds(bounds, { padding: [40, 40] });
@@ -490,10 +753,12 @@ function loadState() {
     addPlacemark(d.type, L.latLng(d.lat, d.lon), { idx: d.idx, group: d.group, alt: d.alt });
     bounds.push([d.lat, d.lon]);
   }
+  syncChicaneCounter();
   if (bounds.length) map.fitBounds(bounds, { padding: [40, 40] });
 }
 
 loadState();
+updateChicaneUI();
 if (!placemarks.length && navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
     (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 17),
