@@ -372,17 +372,30 @@ function escapeXml(s) {
   return String(s).replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
 }
 
+<<<<<<< HEAD
 function nextIndex(type) {
   let max = 0;
   for (const p of placemarks) if (p.type === type) max = Math.max(max, p.idx);
+=======
+function nextIndex(type, group) {
+  let max = 0;
+  for (const p of placemarks) if (p.type === type && p.group === group) max = Math.max(max, p.idx);
+>>>>>>> 8c8fc2d (v1.1 - broken ui)
   return max + 1;
 }
 
 function nameFor(p) {
   if (p.type === 'reference_position') return 'reference_position';
+<<<<<<< HEAD
   let n = `${p.type}-${p.idx}`;
   if ((p.type === 'left_cone' || p.type === 'right_cone') && p.group) n += `_${p.group}`;
   return n;
+=======
+  if ((p.type === 'left_cone' || p.type === 'right_cone') && p.group) {
+    return `${p.type}-${p.idx}_${p.group}`;
+  }
+  return p.type;
+>>>>>>> 8c8fc2d (v1.1 - broken ui)
 }
 
 function makeIcon(type, selected) {
@@ -418,10 +431,19 @@ function addPlacemark(type, latlng, opts) {
     const existing = placemarks.find(p => p.type === 'reference_position');
     if (existing) removePlacemark(existing.id, true);
   }
+<<<<<<< HEAD
   const idx = opts.idx !== undefined ? opts.idx : nextIndex(type);
   const group = (type === 'left_cone' || type === 'right_cone')
     ? (opts.group !== undefined ? opts.group : (chicaneActive ? currentChicaneGroup : null))
     : null;
+=======
+  const group = (type === 'left_cone' || type === 'right_cone')
+    ? (opts.group !== undefined ? opts.group : (chicaneActive ? currentChicaneGroup : null))
+    : null;
+  // Scoped to (type, group) so each chicane's count restarts at 1 instead of
+  // continuing the running total of every left/right cone ever placed.
+  const idx = opts.idx !== undefined ? opts.idx : nextIndex(type, group);
+>>>>>>> 8c8fc2d (v1.1 - broken ui)
 
   const p = {
     id: nextId++,
