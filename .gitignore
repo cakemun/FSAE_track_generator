@@ -1,7 +1,3 @@
 *.mbtiles
-<<<<<<< HEAD
-*.qgz
-=======
 *.qgz
 /Sutton_road_tiles
->>>>>>> 8c8fc2d (v1.1 - broken ui)

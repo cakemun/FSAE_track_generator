@@ -29,8 +29,10 @@
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
+  #sidebar > * { flex-shrink: 0; }
   #sidebar h1 { font-size: 16px; margin: 14px 14px 4px; }
   #sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 14px 6px; }
   .section { padding: 0 14px 12px; border-bottom: 1px solid var(--border); }
@@ -74,7 +76,10 @@
   .cone-btn .count { font-size: 10px; color: var(--muted); }
   .cone-grid { display: flex; gap: 6px; }
   #refBtn { width: 100%; margin-top: 8px; display:flex; align-items:center; justify-content:center; gap:6px; }
-  #list { flex: 1; overflow-y: auto; }
+  #list { max-height: 260px; overflow-y: auto; }
+  #map.ruler-active, #map.ruler-active .leaflet-interactive { cursor: crosshair; }
+  .ruler-label { background: #d81b60; color: #fff; border: none; font-weight: 600; box-shadow: none; }
+  .ruler-label::before { display: none; }
   .item {
     display: flex;
     align-items: center;
@@ -139,6 +144,7 @@
     50% { transform: scale(1.3); }
   }
   .src-btn { flex: 1; }
+  #rulerBtn.active { background: #d81b60; border-color: #d81b60; color: #fff; }
   .src-btn.active { background: #2c6fd1; border-color: #2c6fd1; color: #fff; }
 </style>
 </head>
@@ -178,6 +184,31 @@
       </div>
       <input type="file" id="mbtilesInput" accept=".mbtiles" style="display:none">
       <div id="mbtilesStatus" style="margin-top:6px; font-size:11px; color:var(--muted)">No offline package loaded. Online tiles may be blocked by OSM when run from a local file - load a city .mbtiles package for reliable offline use.</div>
+    </div>
+
+    <div class="section">
+      <h2 style="margin-top:0">Map Tools</h2>
+      <label class="small" for="gridSelect">Grid size</label>
+      <select id="gridSelect">
+        <option value="0">Off</option>
+        <option value="0.1">10 cm</option>
+        <option value="0.2">20 cm</option>
+        <option value="0.5">50 cm</option>
+        <option value="1">1 m</option>
+        <option value="2">2 m</option>
+        <option value="3">3 m</option>
+        <option value="5">5 m</option>
+        <option value="8">8 m</option>
+        <option value="10">10 m</option>
+        <option value="15">15 m</option>
+        <option value="20">20 m</option>
+      </select>
+      <div id="gridNote" style="margin-top:4px; font-size:11px; color:var(--muted)"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="rulerBtn" style="flex:1">Ruler: Off</button>
+        <button id="rulerClearBtn" style="flex:1">Clear Ruler</button>
+      </div>
+      <div id="rulerStatus" style="margin-top:4px; font-size:11px; color:var(--muted)">Enable the ruler, then click two points on the map.</div>
     </div>
 
     <div class="section">
@@ -225,10 +256,12 @@ let placemarks = []; // {id, type, idx, group, lat, lon, alt, marker}
 let nextId = 1;
 let currentType = 'orange_cone';
 
-const map = L.map('map', { zoomControl: true }).setView([0, 0], 2);
+const MAX_MAP_ZOOM = 24; // deep enough for a 10 cm grid cell to span ~10 px
+const map = L.map('map', { zoomControl: true, maxZoom: MAX_MAP_ZOOM }).setView([0, 0], 2);
 
 const onlineLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 20,
+  maxZoom: MAX_MAP_ZOOM,
+  maxNativeZoom: 19,
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
@@ -342,7 +375,7 @@ document.getElementById('mbtilesInput').addEventListener('change', async (e) => 
 
     if (offlineLayer) map.removeLayer(offlineLayer);
     offlineLayer = new MBTilesLayer(db, mime, {
-      minZoom, maxZoom,
+      minZoom, maxZoom: MAX_MAP_ZOOM, maxNativeZoom: maxZoom,
       attribution: 'Offline OSM package'
     });
 
@@ -372,30 +405,18 @@ function escapeXml(s) {
   return String(s).replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
 }
 
-<<<<<<< HEAD
-function nextIndex(type) {
-  let max = 0;
-  for (const p of placemarks) if (p.type === type) max = Math.max(max, p.idx);
-=======
 function nextIndex(type, group) {
   let max = 0;
   for (const p of placemarks) if (p.type === type && p.group === group) max = Math.max(max, p.idx);
->>>>>>> 8c8fc2d (v1.1 - broken ui)
   return max + 1;
 }
 
 function nameFor(p) {
   if (p.type === 'reference_position') return 'reference_position';
-<<<<<<< HEAD
-  let n = `${p.type}-${p.idx}`;
-  if ((p.type === 'left_cone' || p.type === 'right_cone') && p.group) n += `_${p.group}`;
-  return n;
-=======
   if ((p.type === 'left_cone' || p.type === 'right_cone') && p.group) {
     return `${p.type}-${p.idx}_${p.group}`;
   }
   return p.type;
->>>>>>> 8c8fc2d (v1.1 - broken ui)
 }
 
 function makeIcon(type, selected) {
@@ -431,19 +452,12 @@ function addPlacemark(type, latlng, opts) {
     const existing = placemarks.find(p => p.type === 'reference_position');
     if (existing) removePlacemark(existing.id, true);
   }
-<<<<<<< HEAD
-  const idx = opts.idx !== undefined ? opts.idx : nextIndex(type);
-  const group = (type === 'left_cone' || type === 'right_cone')
-    ? (opts.group !== undefined ? opts.group : (chicaneActive ? currentChicaneGroup : null))
-    : null;
-=======
   const group = (type === 'left_cone' || type === 'right_cone')
     ? (opts.group !== undefined ? opts.group : (chicaneActive ? currentChicaneGroup : null))
     : null;
   // Scoped to (type, group) so each chicane's count restarts at 1 instead of
   // continuing the running total of every left/right cone ever placed.
   const idx = opts.idx !== undefined ? opts.idx : nextIndex(type, group);
->>>>>>> 8c8fc2d (v1.1 - broken ui)
 
   const p = {
     id: nextId++,
@@ -608,7 +622,107 @@ function renameChicaneGroup(oldGroup) {
   toast(newGroup ? `Renamed chicane ${oldGroup} -> ${newGroup} (${changed} cones)` : `Ungrouped ${changed} cones from chicane ${oldGroup}`);
 }
 
+// --- Grid overlay (ground-metre spacing) ---
+const M_PER_DEG = 111320;
+const MIN_GRID_PX = 6;
+let gridSize = 0;
+let gridRefLat = 0;
+
+const GridLayer = L.GridLayer.extend({
+  createTile: function (coords) {
+    const tile = document.createElement('canvas');
+    const ts = this.getTileSize();
+    tile.width = ts.x;
+    tile.height = ts.y;
+    if (!gridSize) return tile;
+    const z = coords.z;
+    const b = this._tileCoordsToBounds(coords);
+    const dLat = gridSize / M_PER_DEG;
+    const dLon = gridSize / (M_PER_DEG * Math.max(Math.cos(gridRefLat * Math.PI / 180), 1e-6));
+    const ox = coords.x * ts.x, oy = coords.y * ts.y;
+    const mpp = 40075016.686 * Math.cos(gridRefLat * Math.PI / 180) / (ts.x * Math.pow(2, z));
+    if (gridSize / mpp < MIN_GRID_PX) return tile;
+    const ctx = tile.getContext('2d');
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let lat = Math.ceil(b.getSouth() / dLat) * dLat; lat <= b.getNorth(); lat += dLat) {
+      const y = Math.round(map.project([lat, b.getWest()], z).y - oy) + 0.5;
+      ctx.moveTo(0, y); ctx.lineTo(ts.x, y);
+    }
+    for (let lon = Math.ceil(b.getWest() / dLon) * dLon; lon <= b.getEast(); lon += dLon) {
+      const x = Math.round(map.project([b.getNorth(), lon], z).x - ox) + 0.5;
+      ctx.moveTo(x, 0); ctx.lineTo(x, ts.y);
+    }
+    ctx.stroke();
+    return tile;
+  }
+});
+const gridLayer = new GridLayer({ maxZoom: MAX_MAP_ZOOM, maxNativeZoom: MAX_MAP_ZOOM, pane: 'overlayPane', zIndex: 5 });
+
+function updateGrid() {
+  const note = document.getElementById('gridNote');
+  if (!gridSize) {
+    if (map.hasLayer(gridLayer)) map.removeLayer(gridLayer);
+    note.textContent = '';
+    return;
+  }
+  gridRefLat = map.getCenter().lat;
+  if (!map.hasLayer(gridLayer)) gridLayer.addTo(map); else gridLayer.redraw();
+  const mpp = 40075016.686 * Math.cos(gridRefLat * Math.PI / 180) / (256 * Math.pow(2, map.getZoom()));
+  const px = gridSize / mpp;
+  note.textContent = px < MIN_GRID_PX
+    ? 'Grid cells are very small at this zoom - zoom in to see them.'
+    : `Cell size ${px.toFixed(0)} px at current zoom.`;
+}
+document.getElementById('gridSelect').addEventListener('change', (e) => {
+  gridSize = parseFloat(e.target.value) || 0;
+  updateGrid();
+});
+map.on('zoomend', () => { if (gridSize) updateGrid(); });
+
+// --- Ruler ---
+let rulerActive = false;
+let rulerPoints = [];
+const rulerLayer = L.layerGroup().addTo(map);
+
+function formatDistance(m) {
+  return m >= 1 ? `${m.toFixed(2)} m` : `${(m * 100).toFixed(1)} cm`;
+}
+function redrawRuler() {
+  rulerLayer.clearLayers();
+  rulerPoints.forEach(p => L.circleMarker(p, { radius: 5, color: '#fff', weight: 2, fillColor: '#d81b60', fillOpacity: 1, interactive: false }).addTo(rulerLayer));
+  const status = document.getElementById('rulerStatus');
+  if (rulerPoints.length === 2) {
+    const d = map.distance(rulerPoints[0], rulerPoints[1]);
+    const line = L.polyline(rulerPoints, { color: '#d81b60', weight: 3, interactive: false }).addTo(rulerLayer);
+    line.bindTooltip(formatDistance(d), { permanent: true, direction: 'top', className: 'ruler-label' }).openTooltip();
+    status.textContent = `Distance: ${d.toFixed(3)} m (${(d * 100).toFixed(1)} cm)`;
+  } else if (rulerPoints.length === 1) {
+    status.textContent = 'Click the second point.';
+  } else {
+    status.textContent = rulerActive ? 'Click the first point on the map.' : 'Enable the ruler, then click two points on the map.';
+  }
+}
+document.getElementById('rulerBtn').addEventListener('click', () => {
+  rulerActive = !rulerActive;
+  document.getElementById('rulerBtn').textContent = `Ruler: ${rulerActive ? 'On' : 'Off'}`;
+  document.getElementById('rulerBtn').classList.toggle('active', rulerActive);
+  document.getElementById('map').classList.toggle('ruler-active', rulerActive);
+  redrawRuler();
+});
+document.getElementById('rulerClearBtn').addEventListener('click', () => {
+  rulerPoints = [];
+  redrawRuler();
+});
+
 map.on('click', (e) => {
+  if (rulerActive) {
+    if (rulerPoints.length >= 2) rulerPoints = [];
+    rulerPoints.push(e.latlng);
+    redrawRuler();
+    return;
+  }
   const p = addPlacemark(currentType, e.latlng);
   selectPlacemark(p.id);
   toast(`Placed ${nameFor(p)}`);
